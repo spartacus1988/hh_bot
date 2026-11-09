@@ -1,0 +1,29 @@
+﻿cls=android.widget.TextView bounds=[38,96][682,172] text=HH Bot desc=
+cls=android.widget.TextView bounds=[38,172][682,306] text=Автоматизация hh.ru: находит приложение, открывает его, вводит запрос в поиск и нажимает «Найти». desc=
+cls=android.widget.TextView bounds=[38,306][682,350] text=● Служба доступности включена desc=
+cls=android.widget.TextView bounds=[38,350][682,412] text=● hh.ru найдено: ru.hh.android (версия 26.41) desc=
+cls=android.widget.TextView bounds=[38,412][682,472] text=Поисковый запрос desc=
+cls=android.widget.EditText bounds=[38,472][682,552] text=embedded-программист desc=
+cls=android.widget.TextView bounds=[38,552][682,612] text=Пакет приложения hh.ru desc=
+cls=android.widget.EditText bounds=[38,612][682,687] text=ru.hh.android desc=
+cls=android.widget.Button bounds=[38,706][682,796] text=1. Включить службу доступности desc=
+cls=android.widget.Button bounds=[38,815][682,905] text=2. Проверить приложение hh.ru desc=
+cls=android.widget.Button bounds=[38,924][682,1014] text=3. Запустить hh.ru и выполнить поиск desc=
+cls=android.widget.Button bounds=[38,1033][352,1123] text=Остановить desc=
+cls=android.widget.Button bounds=[367,1033][682,1123] text=Очистить журнал desc=
+cls=android.widget.TextView bounds=[38,1123][682,1183] text=Журнал работы desc=
+cls=android.widget.TextView bounds=[57,1198][663,1372] text=18:21:25  Запрос: «embedded-программист»
+18:21:25  Запускаю ru.hh.android ...
+18:21:25  Приложение hh.ru запущено, жду его окно...
+18:21:26  Новая задача: «embedded-программист» в ru.hh.android
+18:21:28  Окно hh.ru найдено — начинаю искать строку поиска
+18:21:29  Поле/кнопка поиска пока не найдены, продолжаю искать...
+18:21:34  Поле/кнопка поиска пока не найдены, продолжаю искать...
+18:21:36  Служба доступности подключена
+18:21:36  Новая задача: «embedded-программист» в ru.hh.android
+18:21:36  Окно hh.ru найдено — начинаю искать строку поиска
+18:21:37  Поле/кнопка поиска пока не найдены, продолжаю искать...
+18:21:42  Окно hh.ru не видно (свернуто?), жду...
+18:21:52  Окно hh.ru найдено — начинаю искать строку поиска
+18:21:53  Окно hh.ru не видно (свернуто?), жду...
+ desc=

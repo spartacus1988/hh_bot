@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HH Bot</string>
+    <string name="service_label">HH Bot — автоматизация hh.ru</string>
+    <string name="service_description">Открывает hh.ru, вводит поисковый запрос в поле поиска и нажимает «Найти».</string>
+</resources>
