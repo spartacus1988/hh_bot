@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # HH Bot
 
 Android-приложение (Android 10+, minSdk 29), которое работает как «Selenium для телефона»:
@@ -84,3 +85,6 @@ app/src/main/res/xml/accessibility_service_config.xml
 app/src/main/AndroidManifest.xml
 build-apk.ps1                    — сборка APK без Gradle
 ```
+=======
+# hh_bot
+>>>>>>> 4814ae62df65dcb7edd62c0077bdfff54067de1d
