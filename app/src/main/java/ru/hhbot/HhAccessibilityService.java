@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.TextUtils;
+import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
@@ -26,6 +27,8 @@ import java.util.Random;
  * открывает экран поиска, посимвольно вводит запрос и нажимает «Найти».
  */
 public class HhAccessibilityService extends AccessibilityService {
+
+    private static final String TAG = "HhBot";
 
     static final String PREFS = "hhbot";
     static final String KEY_PENDING = "pending";
@@ -82,8 +85,8 @@ public class HhAccessibilityService extends AccessibilityService {
         int typeIndex;
         int typeFailures;
         int entryAttempts;
+        int backAttempts;
         int onboardClicks;
-        int submitAttempts;
     }
 
     private final Runnable ticker = new Runnable() {
@@ -301,6 +304,7 @@ public class HhAccessibilityService extends AccessibilityService {
         // 2. Ищем само поле ввода.
         AccessibilityNodeInfo field = findSearchField(nodes);
         if (field != null) {
+            task.entryAttempts = 0;
             beginTyping(field);
             return;
         }
@@ -310,7 +314,7 @@ public class HhAccessibilityService extends AccessibilityService {
         if (entry != null) {
             String label = describe(entry);
             if (click(entry)) {
-                task.entryAttempts++;
+                task.entryAttempts = 0;
                 BotLog.add("Открываю экран поиска (нажал «" + label + "»)");
                 task.phase = PHASE_WAIT_SEARCH_SCREEN;
                 task.phaseSince = now;
@@ -319,12 +323,30 @@ public class HhAccessibilityService extends AccessibilityService {
         }
 
         task.entryAttempts++;
+
+        // 4. Мы на внутреннем экране hh.ru (результаты поиска, вакансия и т.п.) —
+        //    возвращаемся назад, чтобы добраться до строки поиска.
+        if (task.entryAttempts >= 4 && task.backAttempts < 3) {
+            AccessibilityNodeInfo back = findBackButton(nodes);
+            if (back != null) {
+                task.backAttempts++;
+                task.entryAttempts = 0;
+                BotLog.add("Открыт внутренний экран hh.ru — возвращаюсь назад ("
+                        + task.backAttempts + "/3)");
+                if (click(back)) {
+                    return;
+                }
+                performGlobalAction(GLOBAL_ACTION_BACK);
+                return;
+            }
+        }
+
         if (task.entryAttempts == 4 || task.entryAttempts == 20) {
             BotLog.add("Поле/кнопка поиска пока не найдены, продолжаю искать...");
         }
         if (task.entryAttempts > 60) {
             failTask("Не нашёл строку поиска в приложении hh.ru. "
-                    + "Возможно, оно открылось не на главном экране.");
+                    + "Откройте главный экран hh.ru и нажмите «Запустить» ещё раз.");
         }
     }
 
@@ -346,26 +368,29 @@ public class HhAccessibilityService extends AccessibilityService {
         if (now < task.submitAt) {
             return;
         }
-        task.submitAttempts++;
 
         List<AccessibilityNodeInfo> nodes = flatten(root, 3500);
+
+        // На hh.ru отдельной кнопки «Найти» нет: поиск запускается тапом
+        // по первой подсказке с введённым запросом. Важно не попасть в
+        // подсказку «искать в названиях компаний» — она включает фильтр
+        // «В названии компании» и обнуляет выдачу.
+        AccessibilityNodeInfo suggestion = findQuerySuggestion(nodes, task.query, task.field);
+        if (suggestion != null) {
+            if (click(suggestion)) {
+                finishTask("✅ Готово: введено «" + task.query
+                        + "» и запущен поиск по подсказке");
+                return;
+            }
+        }
+
+        // На случай экранов с настоящей кнопкой «Найти».
         AccessibilityNodeInfo button = findSubmitButton(nodes, task.field);
         if (button != null) {
             String label = describe(button);
             if (click(button)) {
                 finishTask("✅ Готово: введено «" + task.query
                         + "» и нажата кнопка «" + label + "»");
-                return;
-            }
-        }
-
-        // На hh.ru отдельной кнопки «Найти» нет: поиск запускается тапом
-        // по первой подсказке с введённым запросом.
-        AccessibilityNodeInfo suggestion = findQuerySuggestion(nodes, task.query, task.field);
-        if (suggestion != null) {
-            if (click(suggestion)) {
-                finishTask("✅ Готово: введено «" + task.query
-                        + "» и запущен поиск по подсказке");
                 return;
             }
         }
@@ -384,12 +409,15 @@ public class HhAccessibilityService extends AccessibilityService {
             }
         }
 
-        if (task.submitAttempts > 8) {
-            finishTask("⚠ Текст «" + task.query + "» введён, но кнопку «Найти» "
-                    + "найти не удалось. Нажмите поиск вручную.");
+        // Подсказки появляются с задержкой (сеть), поэтому повторяем попытки
+        // по времени, а не по количеству событий.
+        if (now - task.phaseSince > 12_000L) {
+            finishTask("⚠ Текст «" + task.query + "» введён, но строку поиска "
+                    + "запустить не удалось. Нажмите поиск вручную.");
             return;
         }
-        task.submitAt = now + 400;
+        task.submitAt = now + 500;
+        scheduleStep(500);
     }
 
     // ------------------------------------------------------------------
@@ -480,9 +508,10 @@ public class HhAccessibilityService extends AccessibilityService {
                 handler.postDelayed(this, 70 + random.nextInt(90));
             } else {
                 task.phase = PHASE_SUBMIT;
-                task.submitAt = SystemClock.uptimeMillis() + 450;
+                task.phaseSince = SystemClock.uptimeMillis();
+                task.submitAt = task.phaseSince + 600;
                 BotLog.add("Текст введён: «" + task.query + "»");
-                scheduleStep(450);
+                scheduleStep(600);
             }
         }
     };
@@ -593,6 +622,8 @@ public class HhAccessibilityService extends AccessibilityService {
             int score = 0;
             if (containsWord(text, ENTRY_HINT_WORDS) || containsWord(desc, ENTRY_HINT_WORDS)) {
                 score = 120; // «Должность, ключевые слова» — это точно строка поиска
+            } else if (text.contains("результат") || desc.contains("результат")) {
+                score = 0; // заголовок «Результаты поиска» — это не строка ввода
             } else if (isExactSearchWord(text) || isExactSearchWord(desc)) {
                 score = 90;
             } else if (startsWithSearchWord(text) || startsWithSearchWord(desc)) {
@@ -604,6 +635,9 @@ public class HhAccessibilityService extends AccessibilityService {
             }
             if (score == 0) {
                 continue;
+            }
+            if (text.length() > 60) {
+                score -= 40;
             }
 
             Rect bounds = new Rect();
@@ -647,9 +681,7 @@ public class HhAccessibilityService extends AccessibilityService {
 
             String text = lower(node.getText());
             String desc = lower(node.getContentDescription());
-            String id = lower(node.getViewIdResourceName());
-            if (text.isEmpty() && desc.isEmpty() && !id.contains("search")
-                    && !id.contains("submit")) {
+            if (text.isEmpty() && desc.isEmpty()) {
                 continue;
             }
 
@@ -666,8 +698,6 @@ public class HhAccessibilityService extends AccessibilityService {
                 score = 95;
             } else if (containsWord(text, SUBMIT_WORDS) || containsWord(desc, SUBMIT_WORDS)) {
                 score = 80;
-            } else if (id.contains("search") || id.contains("submit")) {
-                score = 55;
             }
             if (score == 0) {
                 continue;
@@ -749,12 +779,45 @@ public class HhAccessibilityService extends AccessibilityService {
             if (bounds.height() > 400) {
                 continue;
             }
+            // hh.ru добавляет вторую подсказку «искать в названиях компаний».
+            // Она включает фильтр «В названии компании» — пропускаем её.
+            if (isCompanySuggestion(clickable)) {
+                Log.i(TAG, "Пропускаю подсказку 'в названиях компаний' " + bounds);
+                continue;
+            }
             if (bounds.top < bestTop) {
                 bestTop = bounds.top;
                 best = clickable;
             }
         }
         return best;
+    }
+
+    /** Подсказка «искать в названиях компаний» (включает фильтр по компании). */
+    private static boolean isCompanySuggestion(AccessibilityNodeInfo row) {
+        String text = subtreeText(row, 0);
+        return text.contains("названиях компаний")
+                || text.contains("названии компании")
+                || text.contains("название компании")
+                || text.contains("названия компании");
+    }
+
+    /** Текст самого узла и его потомков (для Compose-строк с подзаголовком). */
+    private static String subtreeText(AccessibilityNodeInfo node, int depth) {
+        if (node == null || depth > 4) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(lower(node.getText())).append(' ');
+        sb.append(lower(node.getContentDescription())).append(' ');
+        int count = node.getChildCount();
+        for (int i = 0; i < count; i++) {
+            try {
+                sb.append(subtreeText(node.getChild(i), depth + 1)).append(' ');
+            } catch (Throwable ignored) {
+            }
+        }
+        return sb.toString();
     }
 
     private static AccessibilityNodeInfo clickableAncestor(AccessibilityNodeInfo node,
@@ -768,6 +831,36 @@ public class HhAccessibilityService extends AccessibilityService {
                 current = current.getParent();
             } catch (Throwable t) {
                 return null;
+            }
+        }
+        return null;
+    }
+
+    private AccessibilityNodeInfo findBackButton(List<AccessibilityNodeInfo> nodes) {
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        for (AccessibilityNodeInfo node : nodes) {
+            if (!isVisible(node)) {
+                continue;
+            }
+            String text = lower(node.getText());
+            String desc = lower(node.getContentDescription());
+            boolean isBack = text.equals("назад") || desc.equals("назад")
+                    || text.equals("back") || desc.equals("back")
+                    || desc.contains("стрелка назад");
+            if (!isBack) {
+                continue;
+            }
+            AccessibilityNodeInfo clickable = node.isClickable()
+                    ? node : clickableAncestor(node, 6);
+            AccessibilityNodeInfo target = clickable != null ? clickable : node;
+            if (!isVisible(target)) {
+                continue;
+            }
+            Rect bounds = new Rect();
+            target.getBoundsInScreen(bounds);
+            // Кнопка «Назад» — в верхней части экрана.
+            if (screenHeight > 0 && bounds.exactCenterY() < screenHeight * 0.25f) {
+                return target;
             }
         }
         return null;
@@ -908,6 +1001,15 @@ public class HhAccessibilityService extends AccessibilityService {
     private boolean click(AccessibilityNodeInfo node) {
         if (node == null) {
             return false;
+        }
+        try {
+            Rect b = new Rect();
+            node.getBoundsInScreen(b);
+            Log.i(TAG, "Клик: " + node.getClassName()
+                    + " id=" + node.getViewIdResourceName()
+                    + " text=[" + node.getText() + "]"
+                    + " desc=[" + node.getContentDescription() + "] " + b);
+        } catch (Throwable ignored) {
         }
         try {
             if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
