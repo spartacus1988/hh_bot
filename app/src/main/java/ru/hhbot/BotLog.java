@@ -1,5 +1,7 @@
 package ru.hhbot;
 
+import android.util.Log;
+
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.Date;
@@ -27,6 +29,7 @@ public final class BotLog {
             LINES.removeFirst();
         }
         version++;
+        Log.i("HhBot", message);
     }
 
     public static synchronized void clear() {

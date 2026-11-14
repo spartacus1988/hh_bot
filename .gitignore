@@ -4,3 +4,18 @@ local.properties
 *.iml
 .idea/
 app/build/
+
+# Ключ подписи не коммитим
+keystore/
+
+# Тестовые артефакты: скриншоты, дампы UI, логи прогонов
+*.png
+*.idsig
+*.sed
+*.log
+*.err
+
+# Временные дампы и заметки в корне проекта
+/*.xml
+/*.txt
+!/tech_zadanie.txt

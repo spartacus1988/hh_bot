@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    android:versionCode="3"
-    android:versionName="0.3">
+    android:versionCode="6"
+    android:versionName="0.6">
 
     <uses-sdk
         android:minSdkVersion="29"
@@ -10,9 +10,13 @@
     <!-- Нужно, чтобы находить установленное приложение hh.ru на Android 11+ -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
+    <!-- Экран не должен гаснуть во время обхода вакансий -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <queries>
         <package android:name="ru.hh.android" />
         <package android:name="com.hh.android" />
+        <package android:name="com.deepseek.chat" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -21,6 +25,7 @@
 
     <application
         android:allowBackup="false"
+        android:debuggable="true"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -35,6 +40,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".ClipboardRelayActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/ClipboardRelayTheme" />
 
         <service
             android:name=".HhAccessibilityService"
