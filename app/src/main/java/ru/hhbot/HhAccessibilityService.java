@@ -159,6 +159,12 @@ public class HhAccessibilityService extends AccessibilityService {
     private boolean lpScanStop;
     /** Нижняя граница последней открытой карточки — чтобы идти строго вниз по списку. */
     private int lpLastCardBottom;
+    /** Сколько раз нажимали «Ещё вакансии» без найденных новых карточек. */
+    private int lpMoreTries;
+    /** Когда последний раз нажимали «Ещё вакансии», чтобы не спамить кнопку. */
+    private long lpMoreAt;
+    /** Клик привёл на рекламу: после возврата к списку карточку пропускаем. */
+    private boolean lpAdDetour;
     /** Запрос в DeepSeek уже переотправляли для этой вакансии. */
     private boolean lpResent;
     /** DeepSeek открыт без ACTION_SEND — запрос нужно вставить в поле ввода. */
@@ -1583,6 +1589,9 @@ public class HhAccessibilityService extends AccessibilityService {
         lpScanScrolls = 0;
         lpScanStop = false;
         lpLastCardBottom = 0;
+        lpMoreTries = 0;
+        lpMoreAt = 0;
+        lpAdDetour = false;
         lpResent = false;
         lpNewChat = false;
         lpDsLaunched = false;
@@ -1749,6 +1758,19 @@ public class HhAccessibilityService extends AccessibilityService {
 
         Card card = findNextCard(root);
         if (card == null) {
+            long now = SystemClock.uptimeMillis();
+            // Вакансии на странице закончились — hh.ru показывает кнопку
+            // «Ещё вакансии». Нажимаем её и ждём, пока подгрузятся новые
+            // карточки, вместо завершения цикла.
+            if (lpMoreTries < 6 && now - lpMoreAt > 10000
+                    && clickMoreVacancies(root)) {
+                lpMoreTries++;
+                lpMoreAt = now;
+                BotLog.add("Нажимаю «Ещё вакансии» — жду подгрузку ("
+                        + lpMoreTries + ")");
+                pause(2500);
+                return;
+            }
             if (lpAttempts % 5 == 0 && lpAttempts > 0) {
                 if (lpLastCardBottom > 0) {
                     // Следующая карточка ниже видимой области — листаем вниз.
@@ -1758,12 +1780,13 @@ public class HhAccessibilityService extends AccessibilityService {
                     swipe(360, 1100, 360, 620, 500);
                 }
             }
-            if (lpAttempts > 90) {
+            if (lpAttempts > 140) {
                 logScreen(pkg, 30);
                 finishLoop("⚠ Не нашёл следующую вакансию в списке");
             }
             return;
         }
+        lpMoreTries = 0;
 
         lpCurrentKey = card.key;
         lpCurrentTitle = card.title;
@@ -1794,6 +1817,36 @@ public class HhAccessibilityService extends AccessibilityService {
         String pkg = prefs().getString(KEY_PACKAGE, "ru.hh.android");
         AccessibilityNodeInfo root = findRootFor(pkg);
         if (root == null) {
+            // Тап по рекламной карточке курсов уводит в браузер или на
+            // постороннюю веб-страницу. Возвращаемся назад и пропускаем карточку.
+            String top = topPackage();
+            if (lpAttempts >= 6 && !top.isEmpty() && !pkg.equals(top)) {
+                lpAdDetour = true;
+                if (lpAttempts % 6 == 0 && lpBackAttempts < 3) {
+                    lpBackAttempts++;
+                    performGlobalAction(GLOBAL_ACTION_BACK);
+                    BotLog.add("Открылась посторонняя страница — возвращаюсь назад");
+                    pause(1200);
+                    return;
+                }
+                if (lpAttempts > 24) {
+                    bringHhToFront();
+                    if (lpAttempts > 40) {
+                        lpDoneKeys.add(lpCurrentKey);
+                        BotLog.add("⚠ Вместо вакансии открылась реклама — пропускаю: "
+                                + shorten(lpCurrentTitle, 60));
+                        setLoopPhase(LP_NEXT);
+                    }
+                }
+            }
+            return;
+        }
+        if (lpAdDetour && isVacancyList(root)) {
+            // Вернулись к списку после рекламы — карточку больше не открываем.
+            lpDoneKeys.add(lpCurrentKey);
+            BotLog.add("↷ Реклама — пропускаю карточку: "
+                    + shorten(lpCurrentTitle, 60));
+            setLoopPhase(LP_NEXT);
             return;
         }
         if (isVacancyPage(root)) {
@@ -1806,6 +1859,17 @@ public class HhAccessibilityService extends AccessibilityService {
             lpDoneKeys.add(lpCurrentKey);
             BotLog.add("Страница вакансии открыта");
             setLoopPhase(LP_COPY_DESC);
+            return;
+        }
+        // Реклама курсов могла открыться внутри hh.ru (webview).
+        if (lpAttempts >= 12 && looksLikeAdPage(root)) {
+            lpAdDetour = true;
+            lpDoneKeys.add(lpCurrentKey);
+            BotLog.add("⚠ Вместо вакансии открылась реклама — возвращаюсь: "
+                    + shorten(lpCurrentTitle, 60));
+            performGlobalAction(GLOBAL_ACTION_BACK);
+            pause(1200);
+            setLoopPhase(LP_NEXT);
             return;
         }
         // Иногда тап по карточке попадает во внутреннюю кнопку и открывает
@@ -2629,6 +2693,9 @@ public class HhAccessibilityService extends AccessibilityService {
             lpInsertAt = 0;
             lpSendTries = 0;
             lpBackAttempts = 0;
+            lpMoreTries = 0;
+            lpMoreAt = 0;
+            lpAdDetour = false;
 
             if (lpIndex >= lpCount) {
                 finishLoop("🏁 Цикл завершён: обработано " + lpIndex + " вакансий");
@@ -2725,9 +2792,24 @@ public class HhAccessibilityService extends AccessibilityService {
             }
 
             String title = firstLongText(node, 0);
+            String plainTitle = lower(title);
+            if (plainTitle.contains("ещё ваканси") || plainTitle.contains("показать ещё")
+                    || plainTitle.contains("загрузить ещё")
+                    || plainTitle.contains("ещё результаты")) {
+                // Кнопка подгрузки списка — не вакансия.
+                continue;
+            }
             String key = title.length() >= 8
                     ? lower(title) : ("bounds:" + b.left + "," + b.top + ","
                     + b.right + "," + b.bottom);
+            if (isAdCard(node)) {
+                // Рекламные блоки (курсы «Нетология» и т.п.) — не вакансии.
+                if (lpDoneKeys.add(key)) {
+                    BotLog.add("↷ Реклама — пропускаю: "
+                            + shorten(title.isEmpty() ? key : title, 60));
+                }
+                continue;
+            }
             if (lpDoneKeys.contains(key)) {
                 continue;
             }
@@ -2762,6 +2844,105 @@ public class HhAccessibilityService extends AccessibilityService {
             return below;
         }
         return best;
+    }
+
+    /**
+     * Рекламная карточка (курсы, промо): её текст не похож на вакансию.
+     * Смотрим всё поддерево карточки — заголовок, метку «Реклама» и т.п.
+     */
+    private static boolean isAdCard(AccessibilityNodeInfo node) {
+        String blob = lower(subtreeTextLimited(node, 1600));
+        if (blob.isEmpty()) {
+            return false;
+        }
+        if (blob.contains("реклама") || blob.contains("промокод")
+                || blob.contains("вебинар") || blob.contains("буткемп")
+                || blob.contains("скидк") || blob.contains("бесплатн")) {
+            return true;
+        }
+        boolean vacancySigns = blob.contains("₽")
+                || blob.contains("руб")
+                || blob.contains("отклик")
+                || blob.contains("опыт")
+                || blob.contains("занятост")
+                || blob.contains("ваканси");
+        if (vacancySigns) {
+            // Настоящая вакансия может упоминать курсы или обучение.
+            return false;
+        }
+        return blob.contains("нетология")
+                || blob.contains("курсы")
+                || blob.contains("курс ")
+                || blob.contains("онлайн-курс")
+                || blob.contains("школ");
+    }
+
+    /** Реклама курсов, открытая вместо вакансии (внутри hh.ru или в браузере). */
+    private boolean looksLikeAdPage(AccessibilityNodeInfo root) {
+        if (root == null) {
+            return false;
+        }
+        if (hasAnyText(root, new String[]{"откликнуться", "обязанности",
+                "требования", "описание вакансии"})) {
+            return false;
+        }
+        return hasAnyText(root, new String[]{"реклама", "нетология",
+                "промокод", "вебинар", "курсы"});
+    }
+
+    /** Весь текст поддерева, не длиннее maxLen символов. */
+    private static String subtreeTextLimited(AccessibilityNodeInfo node, int maxLen) {
+        StringBuilder sb = new StringBuilder();
+        appendSubtreeText(node, sb, 0, maxLen);
+        return sb.toString();
+    }
+
+    private static void appendSubtreeText(AccessibilityNodeInfo node, StringBuilder sb,
+                                          int depth, int maxLen) {
+        if (node == null || depth > 8 || sb.length() >= maxLen) {
+            return;
+        }
+        CharSequence text = node.getText();
+        if (text != null) {
+            sb.append(' ').append(text);
+        }
+        CharSequence desc = node.getContentDescription();
+        if (desc != null) {
+            sb.append(' ').append(desc);
+        }
+        int count = node.getChildCount();
+        for (int i = 0; i < count && sb.length() < maxLen; i++) {
+            try {
+                appendSubtreeText(node.getChild(i), sb, depth + 1, maxLen);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** Кнопка «Ещё вакансии» / «Показать ещё» в конце списка. */
+    private boolean clickMoreVacancies(AccessibilityNodeInfo root) {
+        if (root == null) {
+            return false;
+        }
+        for (AccessibilityNodeInfo n : flatten(root, 7000)) {
+            if (!isVisible(n)) {
+                continue;
+            }
+            String label = (lower(n.getText()) + " "
+                    + lower(n.getContentDescription())).trim();
+            if (label.isEmpty()) {
+                continue;
+            }
+            if (label.contains("ваканси")
+                    && (label.contains("ещё") || label.contains("еще")
+                    || label.contains("показать") || label.contains("загрузить")
+                    || label.contains("больше"))) {
+                if (click(n)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static String firstLongText(AccessibilityNodeInfo node, int depth) {
@@ -3471,6 +3652,16 @@ public class HhAccessibilityService extends AccessibilityService {
         } catch (Throwable ignored) {
         }
         return null;
+    }
+
+    /** Пакет активного (верхнего) окна. */
+    private String topPackage() {
+        try {
+            AccessibilityNodeInfo root = getRootInActiveWindow();
+            return root == null ? "" : String.valueOf(root.getPackageName());
+        } catch (Throwable ignored) {
+            return "";
+        }
     }
 
     private boolean tap(float x, float y) {
