@@ -87,8 +87,8 @@ Write-Host "==> aapt2 link"
     --java $Gen `
     --min-sdk-version 29 `
     --target-sdk-version 34 `
-    --version-code 7 `
-    --version-name "0.7" `
+    --version-code 8 `
+    --version-name "0.8" `
     --auto-add-overlay
 if ($LASTEXITCODE -ne 0) { throw "aapt2 link failed" }
 
