@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
     private EditText packageInput;
     private EditText queryInput;
     private EditText countInput;
-    private EditText deepseekInput;
+    private EditText chatboxInput;
     private EditText resumeInput;
     private TextView logView;
     private ScrollView logScroll;
@@ -102,7 +102,7 @@ public class MainActivity extends Activity {
 
         TextView subtitle = new TextView(this);
         subtitle.setText("Автоматизация hh.ru: поиск вакансий и обход списка с "
-                + "генерацией сопроводительного письма в DeepSeek.");
+                + "генерацией сопроводительного письма в Chatbox.");
         subtitle.setTextSize(14);
         subtitle.setTextColor(Color.parseColor("#555555"));
         subtitle.setPadding(0, dp(4), 0, dp(16));
@@ -135,13 +135,13 @@ public class MainActivity extends Activity {
         packageInput.setTextSize(14);
         root.addView(packageInput, matchWrap());
 
-        addLabel(root, "Пакет DeepSeek");
-        deepseekInput = new EditText(this);
-        deepseekInput.setSingleLine(true);
-        deepseekInput.setInputType(InputType.TYPE_CLASS_TEXT);
-        deepseekInput.setText(HhAccessibilityService.DEFAULT_DEEPSEEK_PKG);
-        deepseekInput.setTextSize(14);
-        root.addView(deepseekInput, matchWrap());
+        addLabel(root, "Пакет Chatbox");
+        chatboxInput = new EditText(this);
+        chatboxInput.setSingleLine(true);
+        chatboxInput.setInputType(InputType.TYPE_CLASS_TEXT);
+        chatboxInput.setText(HhAccessibilityService.DEFAULT_CHATBOX_PKG);
+        chatboxInput.setTextSize(14);
+        root.addView(chatboxInput, matchWrap());
 
         addLabel(root, "Сколько вакансий обработать за прогон");
         countInput = new EditText(this);
@@ -207,7 +207,7 @@ public class MainActivity extends Activity {
         });
         root.addView(run, buttonParams());
 
-        Button loop = makeButton("4. Обход вакансий и отклики через DeepSeek", true);
+        Button loop = makeButton("4. Обход вакансий и отклики через Chatbox", true);
         loop.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -342,8 +342,8 @@ public class MainActivity extends Activity {
         SharedPreferences sp = prefs();
         queryInput.setText(sp.getString(HhAccessibilityService.KEY_QUERY, DEFAULT_QUERY));
         packageInput.setText(sp.getString(HhAccessibilityService.KEY_PACKAGE, "ru.hh.android"));
-        deepseekInput.setText(sp.getString(HhAccessibilityService.KEY_DEEPSEEK_PKG,
-                HhAccessibilityService.DEFAULT_DEEPSEEK_PKG));
+        chatboxInput.setText(sp.getString(HhAccessibilityService.KEY_CHATBOX_PKG,
+                HhAccessibilityService.DEFAULT_CHATBOX_PKG));
         countInput.setText(String.valueOf(sp.getInt(HhAccessibilityService.KEY_LOOP_COUNT, 3)));
         resumeInput.setText(sp.getString(HhAccessibilityService.KEY_RESUME_TEXT, ""));
     }
@@ -380,8 +380,8 @@ public class MainActivity extends Activity {
                 .putString(HhAccessibilityService.KEY_QUERY, queryInput.getText().toString())
                 .putString(HhAccessibilityService.KEY_PACKAGE,
                         packageInput.getText().toString().trim())
-                .putString(HhAccessibilityService.KEY_DEEPSEEK_PKG,
-                        deepseekInput.getText().toString().trim())
+                .putString(HhAccessibilityService.KEY_CHATBOX_PKG,
+                        chatboxInput.getText().toString().trim())
                 .putInt(HhAccessibilityService.KEY_LOOP_COUNT, count);
         if (looksBrokenResume(resume)) {
             BotLog.add("⚠ Текст резюме в битой кодировке — не сохраняю");
@@ -569,10 +569,10 @@ public class MainActivity extends Activity {
             countInput.setText("3");
         }
 
-        String deepseek = deepseekInput.getText().toString().trim();
-        if (deepseek.isEmpty()) {
-            deepseek = HhAccessibilityService.DEFAULT_DEEPSEEK_PKG;
-            deepseekInput.setText(deepseek);
+        String chatbox = chatboxInput.getText().toString().trim();
+        if (chatbox.isEmpty()) {
+            chatbox = HhAccessibilityService.DEFAULT_CHATBOX_PKG;
+            chatboxInput.setText(chatbox);
         }
 
         savePrefs();
@@ -586,7 +586,7 @@ public class MainActivity extends Activity {
 
         BotLog.clear();
         BotLog.add("Запрос: «" + query + "»");
-        BotLog.add("Цикл по вакансиям: " + count + " шт., DeepSeek: " + deepseek);
+        BotLog.add("Цикл по вакансиям: " + count + " шт., Chatbox: " + chatbox);
         if (resumeInput.getText().toString().trim().isEmpty()) {
             BotLog.add("⚠ Текст резюме пуст — письма будут только по описанию вакансии");
         }
@@ -599,7 +599,7 @@ public class MainActivity extends Activity {
         prefs().edit()
                 .putString(HhAccessibilityService.KEY_QUERY, query)
                 .putString(HhAccessibilityService.KEY_PACKAGE, pkg)
-                .putString(HhAccessibilityService.KEY_DEEPSEEK_PKG, deepseek)
+                .putString(HhAccessibilityService.KEY_CHATBOX_PKG, chatbox)
                 .putInt(HhAccessibilityService.KEY_LOOP_COUNT, count)
                 .putInt(HhAccessibilityService.KEY_LOOP_INDEX, 0)
                 .putString(HhAccessibilityService.KEY_RESUME_TEXT, resumeToRun)

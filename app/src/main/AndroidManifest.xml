@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    android:versionCode="8"
-    android:versionName="0.8">
+    android:versionCode="9"
+    android:versionName="0.9">
 
     <uses-sdk
         android:minSdkVersion="29"
@@ -16,7 +16,7 @@
     <queries>
         <package android:name="ru.hh.android" />
         <package android:name="com.hh.android" />
-        <package android:name="com.deepseek.chat" />
+        <package android:name="xyz.chatboxapp.chatbox" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />

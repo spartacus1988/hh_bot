@@ -24,8 +24,6 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import android.widget.Toast;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -55,14 +53,14 @@ public class HhAccessibilityService extends AccessibilityService {
     static final String KEY_CLIPBOARD = "clipboard_text";
     static final String KEY_CLIPBOARD_AT = "clipboard_at";
     static final String KEY_CLIPBOARD_PURPOSE = "clipboard_purpose";
-    static final String KEY_DEEPSEEK_PKG = "deepseek_pkg";
+    static final String KEY_CHATBOX_PKG = "chatbox_pkg";
     static final String KEY_HH_ACTIVITY = "hh_activity";
     static final String KEY_LOOP_PAUSE_MS = "loop_pause_ms";
     /** Вакансии, на которые уже откликнулись (чтобы не открывать их снова). */
     static final String KEY_RESPONDED = "responded_keys";
     static final String KEY_RESUME_PENDING = "resume_pending";
 
-    static final String DEFAULT_DEEPSEEK_PKG = "com.deepseek.chat";
+    static final String DEFAULT_CHATBOX_PKG = "xyz.chatboxapp.chatbox";
     static final String DEFAULT_HH_ACTIVITY =
             "ru.hh.android/.feature.root.ApplicantRootActivity";
 
@@ -176,21 +174,27 @@ public class HhAccessibilityService extends AccessibilityService {
     private boolean lpAdExit;
     /** Не нажимать «Назад» в начале LP_NEXT: мы уже вернулись к списку. */
     private boolean lpSkipNextBack;
-    /** Запрос в DeepSeek уже переотправляли для этой вакансии. */
+    /** Запрос в Chatbox уже переотправляли для этой вакансии. */
     private boolean lpResent;
-    /** DeepSeek открыт без ACTION_SEND — запрос нужно вставить в поле ввода. */
+    /** Chatbox открыт без ACTION_SEND — запрос нужно вставить в поле ввода. */
     private boolean lpNewChat;
-    /** Приложение DeepSeek уже запускали для этой вакансии. */
+    /** Приложение Chatbox уже запускали для этой вакансии. */
     private boolean lpDsLaunched;
-    /** Запрос уже отдан DeepSeek через «Поделиться». */
+    /** Запрос уже отдан Chatbox через «Поделиться». */
     private boolean lpShareSent;
     /** Повторная вставка запроса, когда поле осталось пустым. */
     private boolean lpShareRetry;
-    /** Сколько раз вставляли запрос в поле DeepSeek и когда — последний раз. */
+    /** Сколько раз вставляли запрос в поле Chatbox и когда — последний раз. */
     private int lpInsertCount;
     private long lpInsertAt;
-    /** Сколько раз пытались нажать «Отправить» в DeepSeek. */
+    /** Сколько раз пытались нажать «Отправить» в Chatbox. */
     private int lpSendTries;
+    /** Клавиатура спрятана перед нажатием «Отправить». */
+    private boolean lpKeyboardHidden;
+    /** Когда последний раз нажимали «Отправить» в Chatbox. */
+    private long lpSendAt;
+    /** Сколько раз пытались открыть новый чат Chatbox. */
+    private int lpNewChatTries;
     /** Последний разобранный ответ начинался с «Тема:» или заголовка. */
     private boolean lpAnswerHadHeader;
     /** Держит экран включённым, пока идёт цикл. */
@@ -1556,7 +1560,7 @@ public class HhAccessibilityService extends AccessibilityService {
     }
 
     // ==================================================================
-    // Цикл по вакансиям: описание -> DeepSeek -> отклик
+    // Цикл по вакансиям: описание -> Chatbox -> отклик
     // ==================================================================
 
     private void pickUpLoopTask() {
@@ -1624,6 +1628,9 @@ public class HhAccessibilityService extends AccessibilityService {
         lpInsertCount = 0;
         lpInsertAt = 0;
         lpSendTries = 0;
+        lpKeyboardHidden = false;
+        lpSendAt = 0;
+        lpNewChatTries = 0;
         lpCurrentKey = "";
         lpCurrentTitle = "";
         setLoopPhase(LP_WAIT_LIST);
@@ -1769,9 +1776,9 @@ public class HhAccessibilityService extends AccessibilityService {
             case LP_COPY_DESC: loopCopyDesc(); break;
             case LP_WAIT_DESC: loopWaitDesc(); break;
             case LP_SCAN_DESC: loopScanDesc(); break;
-            case LP_DS_OPEN: loopDeepSeekOpen(); break;
-            case LP_DS_SEND: loopDeepSeekSend(); break;
-            case LP_DS_WAIT: loopDeepSeekWait(); break;
+            case LP_DS_OPEN: loopChatboxOpen(); break;
+            case LP_DS_SEND: loopChatboxSend(); break;
+            case LP_DS_WAIT: loopChatboxWait(); break;
             case LP_COPY_ANSWER: loopCopyAnswer(); break;
             case LP_BACK_HH: loopBackHh(); break;
             case LP_RESPOND: loopRespond(); break;
@@ -2238,8 +2245,8 @@ public class HhAccessibilityService extends AccessibilityService {
         return low.startsWith("опубликован");
     }
 
-    private void loopDeepSeekOpen() {
-        String dsPkg = prefs().getString(KEY_DEEPSEEK_PKG, DEFAULT_DEEPSEEK_PKG);
+    private void loopChatboxOpen() {
+        String dsPkg = prefs().getString(KEY_CHATBOX_PKG, DEFAULT_CHATBOX_PKG);
         if (lpSentMessage.isEmpty()) {
             String resume = prefs().getString(KEY_RESUME_TEXT, "");
             StringBuilder sb = new StringBuilder();
@@ -2257,17 +2264,17 @@ public class HhAccessibilityService extends AccessibilityService {
         AccessibilityNodeInfo root = findRootFor(dsPkg);
         if (root == null) {
             if (!lpDsLaunched || lpAttempts % 10 == 0) {
-                if (!startDeepSeek(dsPkg)) {
+                if (!startChatbox(dsPkg)) {
                     setLoopPhase(LP_NEXT);
                     return;
                 }
                 lpDsLaunched = true;
-                BotLog.add("Открываю DeepSeek");
+                BotLog.add("Открываю Chatbox");
                 pause(3500);
                 return;
             }
             if (lpAttempts > 60) {
-                BotLog.add("⚠ Окно DeepSeek не появилось");
+                BotLog.add("⚠ Окно Chatbox не появилось");
                 setLoopPhase(LP_NEXT);
             }
             return;
@@ -2275,83 +2282,69 @@ public class HhAccessibilityService extends AccessibilityService {
 
         if (!lpNewChat) {
             // Новый чат — чтобы ответ не путался с прошлой вакансией.
-            // Кнопка в шапке подписана content-desc «Новый чат».
-            lpNewChat = true;
+            // В шапке открытого чата есть кнопка «Новый чат»; на пустом
+            // стартовом экране её нет, и новый чат уже открыт.
             AccessibilityNodeInfo newChat = findByDesc(root, "новый чат");
-            if (newChat != null && click(newChat)) {
-                BotLog.add("DeepSeek: новый чат");
-                pause(1600);
-                return;
+            if (newChat == null) {
+                newChat = findByText(root, new String[]{"новый чат"}, false);
             }
+            if (newChat != null && lpNewChatTries < 3
+                    && hasConversationText(root)) {
+                // В чате ещё видны сообщения прошлой вакансии — открываем
+                // новый и проверяем результат на следующем тике.
+                lpNewChatTries++;
+                Rect nb = new Rect();
+                newChat.getBoundsInScreen(nb);
+                // Кнопка в WebView: ACTION_CLICK не срабатывает, нужен жест.
+                if (tap(nb.exactCenterX(), nb.exactCenterY())) {
+                    BotLog.add("Chatbox: новый чат (" + lpNewChatTries + ")");
+                    pause(1800);
+                    return;
+                }
+            }
+            lpNewChat = true;
         }
 
-        // Прошлый запрос мог остаться в поле ввода — очищаем перед вставкой.
-        if (!lpShareSent) {
-            lpShareSent = true;
-            if (sendDeepSeekShare(dsPkg, lpSentMessage)) {
-                BotLog.add("Открываю DeepSeek и вставляю запрос с описанием");
-                pause(2500);
-                return;
-            }
-            BotLog.add("⚠ «Поделиться» не сработало — вставлю текст в поле вручную");
-        }
-        BotLog.add("DeepSeek открыт — отправляю запрос");
+        // Chatbox не принимает текст через «Поделиться» — сразу вставляем
+        // запрос в поле ввода (пустое поле нового чата).
+        lpShareSent = true;
+        BotLog.add("Chatbox открыт — вставляю запрос");
         setLoopPhase(LP_DS_SEND);
     }
 
-    /**
-     * Вставляет запрос в DeepSeek через «Поделиться». Именно этот путь
-     * обновляет состояние поля ввода корректно (ACTION_SET_TEXT в Compose
-     * не доходит до состояния приложения).
-     */
-    private boolean sendDeepSeekShare(String dsPkg, String text) {
-        try {
-            Intent send = new Intent(Intent.ACTION_SEND);
-            send.setType("text/plain");
-            send.putExtra(Intent.EXTRA_TEXT, text);
-            send.setPackage(dsPkg);
-            send.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(send);
-            return true;
-        } catch (Throwable t) {
-            BotLog.add("ACTION_SEND: " + t);
-            return false;
-        }
-    }
-
-    private boolean startDeepSeek(String dsPkg) {
+    private boolean startChatbox(String dsPkg) {
         try {
             Intent launch = getPackageManager().getLaunchIntentForPackage(dsPkg);
             if (launch == null) {
-                BotLog.add("⚠ Приложение DeepSeek не найдено: " + dsPkg);
+                BotLog.add("⚠ Приложение Chatbox не найдено: " + dsPkg);
                 return false;
             }
             launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(launch);
             return true;
         } catch (Throwable t) {
-            BotLog.add("⚠ Не удалось запустить DeepSeek: " + t);
+            BotLog.add("⚠ Не удалось запустить Chatbox: " + t);
             return false;
         }
     }
 
-    private void loopDeepSeekSend() {
-        String dsPkg = prefs().getString(KEY_DEEPSEEK_PKG, DEFAULT_DEEPSEEK_PKG);
+    private void loopChatboxSend() {
+        String dsPkg = prefs().getString(KEY_CHATBOX_PKG, DEFAULT_CHATBOX_PKG);
         if (lpAttempts < 4) {
             return;
         }
-        AccessibilityNodeInfo field = findDeepSeekInput(dsPkg);
+        AccessibilityNodeInfo field = findChatboxInput(dsPkg);
         AccessibilityNodeInfo root = findRootFor(dsPkg);
         if (field == null) {
             // Поле ввода свёрнуто — нажимаем на строку «Напишите…».
             if (lpAttempts % 4 == 0) {
-                if (focusDeepSeekInput(dsPkg)) {
+                if (focusChatboxInput(dsPkg)) {
                     pause(900);
                 }
             }
             if (lpAttempts > 60) {
                 logScreen(dsPkg, 25);
-                BotLog.add("⚠ Не нашёл поле ввода DeepSeek");
+                BotLog.add("⚠ Не нашёл поле ввода Chatbox");
                 setLoopPhase(LP_NEXT);
             }
             return;
@@ -2367,45 +2360,73 @@ public class HhAccessibilityService extends AccessibilityService {
                 lpInsertCount++;
                 lpInsertAt = now;
                 lpShareRetry = true;
-                boolean inserted = insertDeepSeekPrompt(dsPkg);
-                BotLog.add((inserted ? "Вставляю запрос в поле DeepSeek (попытка "
-                        : "⚠ Не удалось вставить запрос в поле DeepSeek (попытка ")
+                boolean inserted = insertChatboxPrompt(dsPkg);
+                BotLog.add((inserted ? "Вставляю запрос в поле Chatbox (попытка "
+                        : "⚠ Не удалось вставить запрос в поле Chatbox (попытка ")
                         + lpInsertCount + ")");
                 pause(1500);
                 return;
             }
             if (lpInsertCount >= 3 && now - lpInsertAt > 15000) {
                 logScreen(dsPkg, 25);
-                BotLog.add("⚠ Поле ввода DeepSeek осталось пустым — пропускаю вакансию");
+                BotLog.add("⚠ Поле ввода Chatbox осталось пустым — пропускаю вакансию");
                 setLoopPhase(LP_NEXT);
             }
             return;
         }
 
-        if (tapDeepSeekSend()) {
+        // Клавиатура сдвигает строку ввода вверх, из-за чего координаты
+        // кнопки «Отправить» в дереве устаревают. Прячем её, ТОЛЬКО если
+        // она реально показана: «Назад» на пустой клавиатуре закрывает
+        // сам чат Chatbox и выглядит как «открылся новый чат».
+        if (!lpKeyboardHidden) {
+            lpKeyboardHidden = true;
+            if (isImeVisible()) {
+                performGlobalAction(GLOBAL_ACTION_BACK);
+                pause(1200);
+                return;
+            }
+        }
+
+        long sendNow = SystemClock.uptimeMillis();
+        if (sendNow - lpSendAt < 1800) {
+            return;
+        }
+        lpSendAt = sendNow;
+
+        if (tapChatboxSend()) {
+            lpSendTries++;
+            BotLog.add("Нажимаю «Отправить» в Chatbox (" + lpSendTries + ")");
             lpSentAt = SystemClock.uptimeMillis();
             lpSawGenerating = false;
             lpAnswer = "";
             lpAnswerCandidate = "";
             lpAnswerStableSince = 0;
             lpAnswerHadHeader = false;
-            BotLog.add("Запрос отправлен в DeepSeek, жду ответ...");
             setLoopPhase(LP_DS_WAIT);
             return;
         }
         lpSendTries++;
         if (lpSendTries == 8) {
-            // Кнопку «Отправить» может перекрывать клавиатура — прячем её.
-            performGlobalAction(GLOBAL_ACTION_BACK);
-            BotLog.add("Клавиатура закрыта — ищу кнопку отправки ещё раз");
+            lpSendAt = 0;
+            if (isImeVisible()) {
+                performGlobalAction(GLOBAL_ACTION_BACK);
+                BotLog.add("Клавиатура закрыта — ищу кнопку отправки ещё раз");
+            }
             pause(900);
             return;
         }
         if (lpSendTries > 24) {
             logScreen(dsPkg, 25);
-            BotLog.add("⚠ Не нашёл кнопку отправки в DeepSeek");
+            BotLog.add("⚠ Не нашёл кнопку отправки в Chatbox");
             setLoopPhase(LP_NEXT);
         }
+    }
+
+    /** Chatbox генерирует ответ: кнопка «Отправить» заменена на «Остановить». */
+    private boolean isChatboxGenerating(AccessibilityNodeInfo root) {
+        return root != null && hasAnyText(root, new String[]{
+                "остановить", "дождитесь завершения"});
     }
 
     private static int nodeTextLength(AccessibilityNodeInfo node) {
@@ -2420,8 +2441,8 @@ public class HhAccessibilityService extends AccessibilityService {
         }
     }
 
-    /** Самое нижнее поле ввода на экране DeepSeek — это строка сообщения. */
-    private AccessibilityNodeInfo findDeepSeekInput(String dsPkg) {
+    /** Самое нижнее поле ввода на экране Chatbox — это строка сообщения. */
+    private AccessibilityNodeInfo findChatboxInput(String dsPkg) {
         AccessibilityNodeInfo root = findRootFor(dsPkg);
         if (root == null) {
             return null;
@@ -2445,8 +2466,8 @@ public class HhAccessibilityService extends AccessibilityService {
         return best;
     }
 
-    private boolean focusDeepSeekInput(String dsPkg) {
-        AccessibilityNodeInfo field = findDeepSeekInput(dsPkg);
+    private boolean focusChatboxInput(String dsPkg) {
+        AccessibilityNodeInfo field = findChatboxInput(dsPkg);
         if (field != null) {
             try {
                 if (field.isFocused()) {
@@ -2470,15 +2491,16 @@ public class HhAccessibilityService extends AccessibilityService {
             }
             String t = lower(n.getText());
             String d = lower(n.getContentDescription());
-            if (t.startsWith("напишите") || d.startsWith("напишите")) {
+            if (t.startsWith("напишите") || d.startsWith("напишите")
+                    || t.startsWith("введите ваш вопрос") || d.startsWith("введите ваш вопрос")) {
                 return click(n);
             }
         }
         return false;
     }
 
-    private boolean insertDeepSeekPrompt(String dsPkg) {
-        AccessibilityNodeInfo field = findDeepSeekInput(dsPkg);
+    private boolean insertChatboxPrompt(String dsPkg) {
+        AccessibilityNodeInfo field = findChatboxInput(dsPkg);
         if (field == null) {
             return false;
         }
@@ -2506,25 +2528,41 @@ public class HhAccessibilityService extends AccessibilityService {
         return clickAnyText(new String[]{"вставить"});
     }
 
-    private void loopDeepSeekWait() {
+    private void loopChatboxWait() {
         long now = SystemClock.uptimeMillis();
-        String dsPkg = prefs().getString(KEY_DEEPSEEK_PKG, DEFAULT_DEEPSEEK_PKG);
+        String dsPkg = prefs().getString(KEY_CHATBOX_PKG, DEFAULT_CHATBOX_PKG);
         AccessibilityNodeInfo root = findRootFor(dsPkg);
         if (root == null) {
             if (lpAttempts > 400) {
-                BotLog.add("⚠ Окно DeepSeek пропало");
+                BotLog.add("⚠ Окно Chatbox пропало");
                 setLoopPhase(LP_NEXT);
             }
             return;
         }
 
-        boolean generating = hasAnyText(root,
-                new String[]{"остановить", "останови", "stop"});
+        boolean generating = isChatboxGenerating(root);
         if (generating) {
             lpSawGenerating = true;
         }
 
-        // DeepSeek может потерять открытый чат (например, после перезапуска
+        // Клик по «Отправить» иногда не срабатывает (координаты кнопки
+        // успевают устареть): текст остался в поле ввода, ответ не начался.
+        AccessibilityNodeInfo composer = findChatboxInput(dsPkg);
+        boolean composerHasPrompt = composer != null
+                && nodeTextLength(composer) > 80;
+        if (!generating && composerHasPrompt && now - lpSentAt > 6000) {
+            if (lpSendTries < 8) {
+                BotLog.add("⚠ Chatbox не принял запрос — отправляю ещё раз");
+                lpKeyboardHidden = false;
+                setLoopPhase(LP_DS_SEND);
+            } else {
+                BotLog.add("⚠ Не удалось отправить запрос в Chatbox");
+                setLoopPhase(LP_NEXT);
+            }
+            return;
+        }
+
+        // Chatbox может потерять открытый чат (например, после перезапуска
         // приложения) и показать приветствие. Тогда отправляем запрос заново.
         // Важно: текст запроса может быть просто прокручен вверх, поэтому
         // проверяем, есть ли в чате хоть какой-то длинный текст.
@@ -2540,10 +2578,10 @@ public class HhAccessibilityService extends AccessibilityService {
                 lpInsertCount = 0;
                 lpInsertAt = 0;
                 lpSendTries = 0;
-                BotLog.add("⚠ DeepSeek потерял чат — отправляю запрос заново");
+                BotLog.add("⚠ Chatbox потерял чат — отправляю запрос заново");
                 setLoopPhase(LP_DS_OPEN);
             } else {
-                BotLog.add("⚠ DeepSeek не показывает отправленный запрос");
+                BotLog.add("⚠ Chatbox не показывает отправленный запрос");
                 setLoopPhase(LP_NEXT);
             }
             return;
@@ -2553,7 +2591,7 @@ public class HhAccessibilityService extends AccessibilityService {
         // Готовым считаем только текст, который начинается с «Тема:»
         // и уже не меняется несколько секунд.
         if (lpAttempts % 2 == 0) {
-            String answer = extractDeepSeekAnswer(root);
+            String answer = extractChatboxAnswer(root);
             if (answer != null && answer.length() > 40) {
                 boolean withTheme = themeIndex(answer) >= 0;
                 boolean withHeader = withTheme || lpAnswerHadHeader;
@@ -2577,8 +2615,8 @@ public class HhAccessibilityService extends AccessibilityService {
                         String letter = letterFromTheme(answer);
                         lpAnswer = letter;
                         BotLog.add((withTheme
-                                ? "DeepSeek закончил письмо — беру текст после «Тема:»: "
-                                : "DeepSeek закончил письмо: ")
+                                ? "Chatbox закончил письмо — беру текст после «Тема:»: "
+                                : "Chatbox закончил письмо: ")
                                 + letter.length() + " симв.");
                         setLoopPhase(LP_BACK_HH);
                         return;
@@ -2587,27 +2625,27 @@ public class HhAccessibilityService extends AccessibilityService {
             }
         }
 
-        if (now - lpSentAt > 150000) {
-            BotLog.add("⚠ Таймаут ожидания ответа DeepSeek");
+        if (now - lpSentAt > 300000) {
+            BotLog.add("⚠ Таймаут ожидания ответа Chatbox");
             setLoopPhase(LP_COPY_ANSWER);
         }
     }
 
     /** Запасной путь: пробуем прочитать готовый ответ прямо из дерева. */
     private void loopCopyAnswer() {
-        String dsPkg = prefs().getString(KEY_DEEPSEEK_PKG, DEFAULT_DEEPSEEK_PKG);
+        String dsPkg = prefs().getString(KEY_CHATBOX_PKG, DEFAULT_CHATBOX_PKG);
         AccessibilityNodeInfo root = findRootFor(dsPkg);
-        String answer = extractDeepSeekAnswer(root);
+        String answer = extractChatboxAnswer(root);
         if (answer != null && answer.length() > 60) {
             lpAnswer = letterFromTheme(answer);
-            BotLog.add("Ответ DeepSeek прочитан из интерфейса: "
+            BotLog.add("Ответ Chatbox прочитан из интерфейса: "
                     + lpAnswer.length() + " симв.");
             setLoopPhase(LP_BACK_HH);
             return;
         }
         if (lpAttempts > 40) {
             logScreen(dsPkg, 30);
-            BotLog.add("⚠ Не удалось прочитать ответ DeepSeek");
+            BotLog.add("⚠ Не удалось прочитать ответ Chatbox");
             setLoopPhase(LP_NEXT);
         }
     }
@@ -2654,7 +2692,7 @@ public class HhAccessibilityService extends AccessibilityService {
             return;
         }
         if (lpAnswer.trim().length() < 20) {
-            BotLog.add("⚠ Нет письма от DeepSeek — отклик не отправляю");
+            BotLog.add("⚠ Нет письма от Chatbox — отклик не отправляю");
             setLoopPhase(LP_NEXT);
             return;
         }
@@ -2665,7 +2703,7 @@ public class HhAccessibilityService extends AccessibilityService {
             setLoopPhase(LP_NEXT);
             return;
         }
-        // Шторка отклика могла остаться открытой после возврата из DeepSeek.
+        // Шторка отклика могла остаться открытой после возврата из Chatbox.
         if (findByText(root, new String[]{"добавить сопроводительное"}, false) != null) {
             BotLog.add("Шторка отклика уже открыта — заполняю письмо");
             setLoopPhase(LP_RESPOND_FILL);
@@ -3405,10 +3443,10 @@ public class HhAccessibilityService extends AccessibilityService {
         return false;
     }
 
-    // ---------------- DeepSeek ----------------
+    // ---------------- Chatbox ----------------
 
-    private int deepSeekComposerRowY() {
-        String dsPkg = prefs().getString(KEY_DEEPSEEK_PKG, DEFAULT_DEEPSEEK_PKG);
+    private int chatboxComposerRowY() {
+        String dsPkg = prefs().getString(KEY_CHATBOX_PKG, DEFAULT_CHATBOX_PKG);
         AccessibilityNodeInfo root = findRootFor(dsPkg);
         if (root == null) {
             return -1;
@@ -3427,7 +3465,8 @@ public class HhAccessibilityService extends AccessibilityService {
             if (isEditField(n) && b.width() > 200) {
                 return Math.round(b.exactCenterY());
             }
-            if (t.startsWith("напишите") || d.startsWith("напишите")) {
+            if (t.startsWith("напишите") || d.startsWith("напишите")
+                    || t.startsWith("введите ваш вопрос") || d.startsWith("введите ваш вопрос")) {
                 return Math.round(b.exactCenterY());
             }
             if ((t.equals("поиск") || t.equals("рассуждение"))
@@ -3438,15 +3477,16 @@ public class HhAccessibilityService extends AccessibilityService {
         return chipRow;
     }
 
-    private boolean tapDeepSeekSend() {
-        String dsPkg = prefs().getString(KEY_DEEPSEEK_PKG, DEFAULT_DEEPSEEK_PKG);
+    private boolean tapChatboxSend() {
+        String dsPkg = prefs().getString(KEY_CHATBOX_PKG, DEFAULT_CHATBOX_PKG);
         AccessibilityNodeInfo root = findRootFor(dsPkg);
         if (root == null) {
             return false;
         }
 
-        // У DeepSeek кнопка отправки подписана «Отправить», но сам узел
-        // с подписью не clickable — нажимаем по координатам.
+        // У Chatbox кнопка отправки — элемент WebView: ACTION_CLICK проходит
+        // «успешно», но React-обработчик не срабатывает. Поэтому жмём
+        // настоящим жестом по центру кнопки.
         AccessibilityNodeInfo label = null;
         int labelTop = -1;
         for (AccessibilityNodeInfo n : flatten(root, 8000)) {
@@ -3470,24 +3510,15 @@ public class HhAccessibilityService extends AccessibilityService {
             }
         }
         if (label != null) {
-            if (label.isClickable() && click(label)) {
-                return true;
-            }
-            AccessibilityNodeInfo parent = label.getParent();
-            for (int i = 0; i < 3 && parent != null; i++) {
-                if (parent.isClickable()) {
-                    return click(parent);
-                }
-                parent = parent.getParent();
-            }
             Rect b = new Rect();
             label.getBoundsInScreen(b);
+            Log.i(TAG, "Тап по кнопке отправки Chatbox " + b);
             return tap(b.exactCenterX(), b.exactCenterY());
         }
 
         // Запасной путь: самая правая кликабельная кнопка в строке ввода.
         int h = screenHeight();
-        int rowY = deepSeekComposerRowY();
+        int rowY = chatboxComposerRowY();
         AccessibilityNodeInfo best = null;
         int bestX = -1;
         for (AccessibilityNodeInfo n : flatten(root, 7000)) {
@@ -3504,10 +3535,13 @@ public class HhAccessibilityService extends AccessibilityService {
                 continue;
             }
             String d = lower(n.getContentDescription());
+            String t = lower(n.getText());
             if (d.contains("прикрепить") || d.contains("голос")
                     || d.contains("озвуч") || d.contains("настройк")
                     || d.contains("рассужд") || d.contains("поиск")
-                    || d.contains("новый чат") || d.contains("панель")) {
+                    || d.contains("новый чат") || d.contains("панель")
+                    || d.contains("режим чата") || d.contains("chatbox")
+                    || t.contains("chatbox ai") || t.startsWith("chatbox-ai")) {
                 continue;
             }
             if (b.exactCenterX() > bestX) {
@@ -3515,65 +3549,51 @@ public class HhAccessibilityService extends AccessibilityService {
                 best = n;
             }
         }
-        return best != null && click(best);
-    }
-
-    private static final class Txt {
-        final String text;
-        final int top;
-        final int left;
-
-        Txt(String text, int top, int left) {
-            this.text = text;
-            this.top = top;
-            this.left = left;
+        if (best == null) {
+            return false;
         }
+        Rect bb = new Rect();
+        best.getBoundsInScreen(bb);
+        Log.i(TAG, "Тап по кнопке отправки Chatbox (запасной) " + bb);
+        return tap(bb.exactCenterX(), bb.exactCenterY());
     }
 
     /**
-     * Достаёт из дерева DeepSeek только итоговое письмо: находит последний
+     * Достаёт из дерева Chatbox только итоговое письмо: находит последний
      * узел, начинающийся с «Тема:», и берёт текст начиная с него. Рассуждения
      * модели и служебные кнопки при этом отбрасываются.
+     *
+     * В WebView Chatbox ответ разбит на отдельные узлы, а всё, что выше
+     * видимой области, приходит с нулевой высотой. Поэтому идём в порядке
+     * документа (он совпадает с порядком чтения), а не по координатам.
      */
-    private String extractDeepSeekAnswer(AccessibilityNodeInfo root) {
+    private String extractChatboxAnswer(AccessibilityNodeInfo root) {
         if (root == null) {
             return null;
         }
-        List<Txt> items = new ArrayList<>();
+        List<String> items = new ArrayList<>();
         for (AccessibilityNodeInfo n : flatten(root, 9000)) {
             CharSequence cs = n.getText();
             if (cs == null) {
                 continue;
             }
             String t = cs.toString().trim();
-            if (t.length() < 2 || isDeepSeekChrome(t) || isPartOfSentMessage(t)) {
+            if (t.length() < 2 || isChatboxChrome(t) || isPartOfSentMessage(t)) {
                 continue;
             }
-            Rect b = new Rect();
-            n.getBoundsInScreen(b);
-            if (b.width() <= 0 || b.height() <= 0) {
+            t = stripTokenFooter(t);
+            if (t.length() < 2) {
                 continue;
             }
-            items.add(new Txt(t, b.top, b.left));
+            items.add(t);
         }
         if (items.isEmpty()) {
             return null;
         }
 
-        // Визуальный порядок: сверху вниз, слева направо.
-        Collections.sort(items, new Comparator<Txt>() {
-            @Override
-            public int compare(Txt a, Txt b) {
-                if (a.top != b.top) {
-                    return a.top - b.top;
-                }
-                return a.left - b.left;
-            }
-        });
-
         int anchor = -1;
         for (int i = 0; i < items.size(); i++) {
-            if (themeIndex(items.get(i).text) >= 0) {
+            if (themeIndex(items.get(i)) >= 0) {
                 anchor = i;
             }
         }
@@ -3585,20 +3605,18 @@ public class HhAccessibilityService extends AccessibilityService {
             // Модель может начать письмо заголовком «Сопроводительное письмо»
             // вместо строки «Тема:». Тогда заголовок тоже отбрасываем.
             for (int i = 0; i < items.size(); i++) {
-                if (isLetterHeader(items.get(i).text)) {
+                if (isLetterHeader(items.get(i))) {
                     start = i + 1;
                     skipHeaderNode = true;
                     lpAnswerHadHeader = true;
-                    break;
                 }
             }
         }
         if (start < 0) {
             // Совсем без заголовка — ищем начало письма по приветствию.
             for (int i = 0; i < items.size(); i++) {
-                if (looksLikeLetter(items.get(i).text)) {
+                if (looksLikeLetter(items.get(i))) {
                     start = i;
-                    break;
                 }
             }
         }
@@ -3611,7 +3629,7 @@ public class HhAccessibilityService extends AccessibilityService {
 
         StringBuilder sb = new StringBuilder();
         for (int i = start; i < items.size(); i++) {
-            String t = items.get(i).text;
+            String t = items.get(i);
             if (i == start) {
                 int at = themeIndex(t);
                 if (at > 0) {
@@ -3626,7 +3644,10 @@ public class HhAccessibilityService extends AccessibilityService {
             }
             sb.append(t);
         }
-        String result = sb.toString().trim();
+        String result = stripTokenFooter(sb.toString().trim());
+        if (result.length() > 80) {
+            Log.i(TAG, "Хвост письма: " + result.substring(result.length() - 80));
+        }
         return result.isEmpty() ? null : result;
     }
 
@@ -3644,7 +3665,7 @@ public class HhAccessibilityService extends AccessibilityService {
                 continue;
             }
             String t = cs.toString().trim();
-            if (t.length() < 120 || isDeepSeekChrome(t) || isPartOfSentMessage(t)) {
+            if (t.length() < 120 || isChatboxChrome(t) || isPartOfSentMessage(t)) {
                 continue;
             }
             return true;
@@ -3714,22 +3735,34 @@ public class HhAccessibilityService extends AccessibilityService {
         return lpSentMessage.contains(head);
     }
 
-    private static boolean isDeepSeekChrome(String text) {
+    private static boolean isChatboxChrome(String text) {
         String t = lower(text);
         if (t.length() > 20000) {
             return true;
         }
-        return t.equals("копировать") || t.equals("поделиться")
+        return t.equals("копировать") || t.equals("скопировать")
+                || t.equals("поделиться") || t.equals("еще") || t.equals("ещё")
                 || t.equals("рассуждение") || t.equals("поиск")
                 || t.equals("стоп") || t.equals("остановить")
                 || t.equals("хороший ответ") || t.equals("плохой ответ")
-                || t.equals("новый чат") || t.equals("deepseek")
+                || t.equals("новый чат") || t.equals("chatbox")
                 || t.equals("прикрепить файлы") || t.equals("отправить")
+                || t.equals("ответить снова") || t.equals("редактировать")
+                || t.equals("режим чата") || t.equals("untitled")
+                || t.startsWith("chatboxai")
+                || t.startsWith("chatbox-ai image icon")
+                || t.startsWith("частичная оценка")
+                || t.startsWith("полная оценка")
+                || t.startsWith("you are a helpful assistant")
+                || t.startsWith("дождитесь завершения")
+                || t.startsWith("ai может ошибаться")
+                || isTokenCountLine(t)
                 || t.startsWith("размышлял") || t.startsWith("рассужд")
                 || t.startsWith("думал") || t.startsWith("глубокое размышление")
                 || t.startsWith("напишите или удерживайте")
                 || t.startsWith("напишите сообщение")
-                || t.startsWith("создано deepseek")
+                || t.startsWith("введите ваш вопрос")
+                || t.startsWith("создано chatbox")
                 || t.equals("читать вслух") || t.equals("повторить")
                 || t.equals("развернуть") || t.equals("свернуть")
                 || t.equals("перейти на голос")
@@ -3737,7 +3770,69 @@ public class HhAccessibilityService extends AccessibilityService {
                 || t.equals("открыть боковую панель");
     }
 
+    /** Строка вида «· 4545 tokens», «4545 tokens», «~3K tokens». */
+    private static boolean isTokenCountLine(String text) {
+        String t = lower(text);
+        if (t.length() > 40 || (!t.endsWith("tokens") && !t.endsWith("token"))) {
+            return false;
+        }
+        return t.matches(".*\\d.*");
+    }
+
+    /**
+     * Убирает у текста хвостовые строки со счётчиком токенов Chatbox.
+     * Иногда WebView отдаёт ответ и метаданные одним узлом — тогда счётчик
+     * «· N tokens» оказывается в конце письма.
+     */
+    private static String stripTokenFooter(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+        String[] lines = text.split("\n", -1);
+        int end = lines.length;
+        while (end > 0 && isTokenCountLine(lines[end - 1])) {
+            end--;
+        }
+        String body = text;
+        if (end != lines.length) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < end; i++) {
+                if (i > 0) {
+                    sb.append('\n');
+                }
+                sb.append(lines[i]);
+            }
+            body = sb.toString();
+        }
+        // На случай, если счётчик приклеен к последней строке без перевода строки.
+        return body
+                .replaceAll("(?is)\\s*(?:[·•~\\-–—]\\s*)?\\d[\\d\\s.,kK]{0,12}\\s*tokens?\\s*$", "")
+                .trim();
+    }
+
     // ---------------- служебные действия ----------------
+
+    /** Экранная клавиатура реально показана (а не просто свёрнута). */
+    private boolean isImeVisible() {
+        try {
+            for (AccessibilityWindowInfo w : getWindows()) {
+                if (w.getType() != AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                    continue;
+                }
+                AccessibilityNodeInfo r = w.getRoot();
+                if (r == null) {
+                    continue;
+                }
+                Rect b = new Rect();
+                r.getBoundsInScreen(b);
+                if (b.height() > 0) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
 
     private int screenHeight() {
         return getResources().getDisplayMetrics().heightPixels;
